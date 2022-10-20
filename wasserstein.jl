@@ -7,37 +7,21 @@ using SparseArrays
 
 Random.seed!(42)
 
+##
+
 # power system data
 case_file = "data/matpower/case5.m"
 matdata = read_matpower_m_file(case_file)
 ps = create_topology_data_from_matpower_data(matdata)
 
-ps.branch_smax = [4.; 1.9; 2.2; 1.; 1.; 2.4;] # only 1 and 6 are defined in the case5 dataset
-
-# wind power data and distributions
-D = 2 # number of features/data vendors
-w = [100, 150] ./ ps.basemva # wind forecast
-w_dist = [Normal(0, f*0.15) for f in w] # (unknown) distribution of forecast errors
-Nj = [5, 10] # number of samples from vendor
-ω_hat =  [rand(w_dist[j], Nj[j]) for j in 1:D] # samples from each data source
-ϵj = [0.1, 0.001] # wasserstein budget for each data source
+ps.branch_smax = [4.; 1.9; 2.2; 1.; 1.; 2.4;] # only 1 and 6 are limited in the case5 dataset
 ps.wind_loc = [3,5]
 ps.Nwind = 2
 
-N_total = prod(Nj)
-emp_support = zeros((D,N_total))
-for j in 1:D
-    for i in 0:N_total-1
-        emp_support[j, i+1] = ω_hat[j][mod(i,Nj[j])+1]
-    end
-end 
-ω_hat_max = [maximum(ω_hat[j]) for j in 1:D]
-ω_hat_min = [minimum(ω_hat[j]) for j in 1:D]
- 
 # additonal data
 d = matdata.bus[:,3] ./ ps.basemva
 cE = ps.gen_cost_lin
-cR = cA = [100; 100; 10; 10; 100]
+cR = cA = [80; 80; 15; 30; 80]
 
 gen2bus = sparse(ps.gen_loc, 1:ps.Ngen, ones(ps.Ngen), ps.Nbus, ps.Ngen)
 wind2bus = sparse(ps.wind_loc, 1:ps.Nwind, ones(ps.Nwind), ps.Nbus, ps.Nwind)
@@ -57,9 +41,35 @@ gen_cost = cE'*(p.*ps.basemva)
 @objective(mopf, Min, gen_cost)
 optimize!(mopf)
 
+value.(p)
+
+##
+
+# wind power data and distributions
+D = 2 # number of features/data vendors
+w = [100, 150] ./ ps.basemva # wind forecast
+w_dist = [Normal(0, f*0.15) for f in w] # (unknown) distribution of forecast errors
+Nj = [5, 10] # number of samples from vendor
+ω_hat =  [rand(w_dist[j], Nj[j]) for j in 1:D] # samples from each data source
+println(ω_hat)
+ϵj = [0.1, 0.005] # wasserstein budget for each data source
+
+N_total = prod(Nj)
+emp_support = zeros((D,N_total))
+for j in 1:D
+    for i in 0:N_total-1
+        emp_support[j, i+1] = ω_hat[j][mod(i,Nj[j])+1]
+    end
+end 
+ω_hat_max = [maximum(ω_hat[j]) for j in 1:D]
+ω_hat_min = [minimum(ω_hat[j]) for j in 1:D]
+
+# some tweaks
+FR = 0.8 # factor for flow limits
 
 # Robust DCOPF with WD-DR Cost
 m = Model(Gurobi.Optimizer)
+set_optimizer_attribute(m, "OutputFlag", 0)
 @variable(m, p[g=1:ps.Ngen] >=0)
 @variable(m, rp[g=1:ps.Ngen] >=0)
 @variable(m, rm[g=1:ps.Ngen] >=0)
@@ -74,8 +84,8 @@ m = Model(Gurobi.Optimizer)
 @constraint(m, p .- rm .>= ps.gen_pmin)
 @constraint(m, A'ones(ps.Ngen) .== ones(ps.Nwind))
 flow = ptdf*(gen2bus*p + wind2bus*w - d)
-@constraint(m,  flow .== ps.branch_smax .- fRAMp)
-@constraint(m, -flow .== ps.branch_smax .- fRAMm)
+@constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
+@constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
 
 for ω_hat in emp_support
     @constraint(m, -A*ω_hat .<= rp)
@@ -100,6 +110,10 @@ expcost = sum(λ[j]*ϵj[j] + 1/Nj[j] * sum(s[j,i] for i in 1:Nj[j]) for j in 1:D
 optimize!(m)
 
 value.(λ)
+##
+
+# look at some results
+
 dual.(enerbal)
 
 value(expcost)
