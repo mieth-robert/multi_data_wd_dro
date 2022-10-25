@@ -14,7 +14,6 @@ Random.seed!(42)
 ##
 include("models.jl")
 
-##
 mutable struct SimData
     ps::Any
     cE::Vector{Float64}
@@ -46,25 +45,25 @@ wind2bus = sparse(ps.wind_loc, 1:ps.Nwind, ones(ps.Nwind), ps.Nbus, ps.Nwind)
 ptdf = create_ptdf_matrix(ps)
 
 # Simple DCOPF for analysis
-mopf = Model(Gurobi.Optimizer)
-@variable(mopf, p[g=1:ps.Ngen] >= 0)
-@constraint(mopf, sum(p) == sum(d))
-@constraint(mopf, p .<= ps.gen_pmax)
-@constraint(mopf, p .>= ps.gen_pmin)
-flow = ptdf*(gen2bus*p - d)
-@constraint(mopf,  flow .<= ps.branch_smax)
-@constraint(mopf, -flow .<= ps.branch_smax)
-gen_cost = cE'*(p.*ps.basemva)
-@objective(mopf, Min, gen_cost)
-optimize!(mopf)
-value.(p)
+# mopf = Model(Gurobi.Optimizer)
+# @variable(mopf, p[g=1:ps.Ngen] >= 0)
+# @constraint(mopf, sum(p) == sum(d))
+# @constraint(mopf, p .<= ps.gen_pmax)
+# @constraint(mopf, p .>= ps.gen_pmin)
+# flow = ptdf*(gen2bus*p - d)
+# @constraint(mopf,  flow .<= ps.branch_smax)
+# @constraint(mopf, -flow .<= ps.branch_smax)
+# gen_cost = cE'*(p.*ps.basemva)
+# @objective(mopf, Min, gen_cost)
+# optimize!(mopf)
+# value.(p)
 
 ##
 # Experiment 1
 # Test with different epsilon
 # set support width
 simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
-support_width = 0.1
+support_width = 0.5
 eps_set = [1., 0.5, 0.2, 0.1, 0.05, 0.01, 0.005, 0.001]
 lam_res = Dict()
 for (ei,e) in enumerate(eps_set)
@@ -73,7 +72,7 @@ for (ei,e) in enumerate(eps_set)
         lam = [0., 0.]
         for i in 1:10
             # run 10 times and average to reduce effects from samples
-            lam .+= run_robust_wc(simdat, eps, support_width)
+            lam .+= run_robust_wc(simdat, act_eps, support_width; sample_support=true)
         end
         lam_res[(ei,eei)] = 0.1 .* lam
     end
@@ -119,30 +118,3 @@ CSV.write("lam_res.csv", lam_df)
 # gcf()
 
 # CSV.write("lam1.csv",  Tables.table(lam1_grid), writeheader=false)
-
-
-#
-
-
-
-
-
-
-# look at some results
-
-dual.(enerbal)
-
-value(expcost)
-value(gencost)
-value(rescost)
-
-value.(p)
-value.(A)
-
-value.(rp)
-value.(rm)
-
-value.(fRAMp)
-value.(fRAMm)
-
-value.(flow)

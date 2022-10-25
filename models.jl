@@ -1,5 +1,5 @@
 
-function run_robust_wc(simdata, epsilon, support_width)
+function run_robust_wc(simdata, epsilon, support_width; sample_support=false)
 
     ps = simdata.ps
     cE = simdata.cE
@@ -29,11 +29,14 @@ function run_robust_wc(simdata, epsilon, support_width)
             emp_support[j, i+1] = ω_hat[j][mod(i,Nj[j])+1]
         end
     end 
-    # ω_hat_max = [maximum(ω_hat[j]) for j in 1:D]
-    # ω_hat_min = [minimum(ω_hat[j]) for j in 1:D]
 
-    ω_hat_max =  w .* support_width
-    ω_hat_min = -w .* support_width
+    if sample_support
+        ω_hat_max = [maximum(ω_hat[j]) for j in 1:D]
+        ω_hat_min = [minimum(ω_hat[j]) for j in 1:D]
+    else
+        ω_hat_max =  w .* support_width
+        ω_hat_min = -w .* support_width
+    end
 
     # some tweaks
     FR = 0.8 # factor for flow limits
