@@ -4,11 +4,29 @@ using Random, Distributions
 using LinearAlgebra
 using JuMP, Gurobi
 using SparseArrays
+using CSV, Tables
+using DataFrames
+
+import PyPlot as plt
 
 Random.seed!(42)
 
 ##
+include("models.jl")
 
+##
+mutable struct SimData
+    ps::Any
+    cE::Vector{Float64}
+    cR::Vector{Float64}
+    cA::Vector{Float64}
+    d::Vector{Float64}
+    gen2bus::Union{SparseMatrixCSC, Matrix}
+    wind2bus::Union{SparseMatrixCSC, Matrix}
+    ptdf::Union{SparseMatrixCSC, Matrix}
+end
+
+##
 # power system data
 case_file = "data/matpower/case5.m"
 matdata = read_matpower_m_file(case_file)
@@ -27,7 +45,6 @@ gen2bus = sparse(ps.gen_loc, 1:ps.Ngen, ones(ps.Ngen), ps.Nbus, ps.Ngen)
 wind2bus = sparse(ps.wind_loc, 1:ps.Nwind, ones(ps.Nwind), ps.Nbus, ps.Nwind)
 ptdf = create_ptdf_matrix(ps)
 
-
 # Simple DCOPF for analysis
 mopf = Model(Gurobi.Optimizer)
 @variable(mopf, p[g=1:ps.Ngen] >= 0)
@@ -40,77 +57,76 @@ flow = ptdf*(gen2bus*p - d)
 gen_cost = cE'*(p.*ps.basemva)
 @objective(mopf, Min, gen_cost)
 optimize!(mopf)
-
 value.(p)
 
 ##
-
-# wind power data and distributions
-D = 2 # number of features/data vendors
-w = [100, 150] ./ ps.basemva # wind forecast
-w_dist = [Normal(0, f*0.15) for f in w] # (unknown) distribution of forecast errors
-Nj = [5, 10] # number of samples from vendor
-ω_hat =  [rand(w_dist[j], Nj[j]) for j in 1:D] # samples from each data source
-println(ω_hat)
-ϵj = [0.1, 0.005] # wasserstein budget for each data source
-
-N_total = prod(Nj)
-emp_support = zeros((D,N_total))
-for j in 1:D
-    for i in 0:N_total-1
-        emp_support[j, i+1] = ω_hat[j][mod(i,Nj[j])+1]
-    end
-end 
-ω_hat_max = [maximum(ω_hat[j]) for j in 1:D]
-ω_hat_min = [minimum(ω_hat[j]) for j in 1:D]
-
-# some tweaks
-FR = 0.8 # factor for flow limits
-
-# Robust DCOPF with WD-DR Cost
-m = Model(Gurobi.Optimizer)
-set_optimizer_attribute(m, "OutputFlag", 0)
-@variable(m, p[g=1:ps.Ngen] >=0)
-@variable(m, rp[g=1:ps.Ngen] >=0)
-@variable(m, rm[g=1:ps.Ngen] >=0)
-@variable(m, λ[j=1:D] >=0)
-@variable(m, s[j=1:D, i=1:Nj[j]])
-@variable(m, A[g=1:ps.Ngen, j=1:D] >=0)
-@variable(m, fRAMp[l=1:ps.Nbranch] >=0)
-@variable(m, fRAMm[l=1:ps.Nbranch] >=0)
-
-@constraint(m, enerbal, sum(p) + sum(w) == sum(d))
-@constraint(m, p .+ rp .<= ps.gen_pmax)
-@constraint(m, p .- rm .>= ps.gen_pmin)
-@constraint(m, A'ones(ps.Ngen) .== ones(ps.Nwind))
-flow = ptdf*(gen2bus*p + wind2bus*w - d)
-@constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
-@constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
-
-for ω_hat in emp_support
-    @constraint(m, -A*ω_hat .<= rp)
-    @constraint(m,  A*ω_hat .<= rm)
-    delta_flow = ptdf*(wind2bus - gen2bus*A)*ω_hat
-    @constraint(m,  delta_flow .<= fRAMp)
-    @constraint(m, -delta_flow .<= fRAMm)
-end
-
-for j in 1:D
-    for i in 1:Nj[j]
-        @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_max[j] for g in 1:ps.Ngen) - λ[j]*(ω_hat_max[j] - ω_hat[j][i]))
-        @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_min[j] for g in 1:ps.Ngen) + λ[j]*(ω_hat_min[j] - ω_hat[j][i]))
-        @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+# Experiment 1
+# Test with different epsilon
+# set support width
+simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
+support_width = 0.1
+eps_set = [1., 0.5, 0.2, 0.1, 0.05, 0.01, 0.005, 0.001]
+lam_res = Dict()
+for (ei,e) in enumerate(eps_set)
+    for (eei,ee) in enumerate(eps_set)
+        act_eps = [e, ee]
+        lam = [0., 0.]
+        for i in 1:10
+            # run 10 times and average to reduce effects from samples
+            lam .+= run_robust_wc(simdat, eps, support_width)
+        end
+        lam_res[(ei,eei)] = 0.1 .* lam
     end
 end
 
-gencost = cE' * (p .* ps.basemva)
-rescost = cR' * ((rp .+ rm) .* ps.basemva)
-expcost = sum(λ[j]*ϵj[j] + 1/Nj[j] * sum(s[j,i] for i in 1:Nj[j]) for j in 1:D)
-@objective(m, Min, gencost + rescost + expcost)
-optimize!(m)
+data = []
+for (k,v) in lam_res
+    push!(data, Dict(
+    "eps1" => eps_set[k[1]],
+    "eps2" => eps_set[k[2]],
+    "lam1" => v[1],
+    "lam2" => v[2])
+    )
+end
+lam_df = DataFrame(data)
+CSV.write("lam_res.csv", lam_df)
 
-value.(λ)
 ##
+
+
+
+
+
+
+
+# # Create some plots
+
+# lam1_grid = zeros(length(eps_set), length(eps_set))
+# lam2_grid = zeros(length(eps_set), length(eps_set))
+# for (k,v) in lam_res
+#     lam1_grid[k[1], k[2]] = v[1]
+#     lam2_grid[k[1], k[2]] = v[2]
+# end
+
+# fig, axs = plt.subplots(2, 1)
+# axs[1].pcolor(lam1_grid)
+# axs[2].pcolor(lam2_grid)
+# for i in size(lam1_grid, 1)
+#     for j in size(lam1_grid, 2)
+#         axs[1].text(j, i, "$(lam1_grid[i,j])", ha="center", va="center")
+#     end
+# end
+# gcf()
+
+# CSV.write("lam1.csv",  Tables.table(lam1_grid), writeheader=false)
+
+
+#
+
+
+
+
+
 
 # look at some results
 
