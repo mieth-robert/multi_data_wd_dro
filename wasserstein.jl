@@ -9,8 +9,6 @@ using DataFrames
 
 import PyPlot as plt
 
-Random.seed!(42)
-
 ##
 include("models.jl")
 
@@ -63,16 +61,18 @@ ptdf = create_ptdf_matrix(ps)
 # Test with different epsilon
 # set support width
 simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
-support_width = 0.5
+support_width = 0.25
 eps_set = [1., 0.5, 0.2, 0.1, 0.05, 0.01, 0.005, 0.001]
 lam_res = Dict()
 for (ei,e) in enumerate(eps_set)
     for (eei,ee) in enumerate(eps_set)
         act_eps = [e, ee]
         lam = [0., 0.]
+        Random.seed!(42) # reset seed here so that every set of parameters has same set of samples
         for i in 1:10
             # run 10 times and average to reduce effects from samples
-            lam .+= run_robust_wc(simdat, act_eps, support_width; sample_support=true)
+            res = run_robust_wc(simdat, act_eps, support_width; sample_support=false)
+            lam .+= res.lambdas 
         end
         lam_res[(ei,eei)] = 0.1 .* lam
     end
@@ -88,12 +88,19 @@ for (k,v) in lam_res
     )
 end
 lam_df = DataFrame(data)
+lam_df = lam_df[!, ["eps1", "eps2", "lam1", "lam2"]]
+sort!(lam_df, [:eps2, :eps1], rev=true)
 CSV.write("lam_res.csv", lam_df)
 
 ##
 
+## 
+# Single run
+simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
+support_width = 0.5
+res = run_robust_wc(simdat, [0.1, 0.1], 0.25; sample_support=true)
 
-
+##
 
 
 

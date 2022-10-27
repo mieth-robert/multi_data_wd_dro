@@ -69,11 +69,19 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false)
         @constraint(m, -delta_flow .<= fRAMm)
     end
 
+    ji_tuples = []
+    s_up = []
+    s_lo = []
+    s_av = []
     for j in 1:D
         for i in 1:Nj[j]
-            @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_max[j] for g in 1:ps.Ngen) - λ[j]*(ω_hat_max[j] - ω_hat[j][i]))
-            @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_min[j] for g in 1:ps.Ngen) + λ[j]*(ω_hat_min[j] - ω_hat[j][i]))
-            @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+            act_s_up = @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_max[j] for g in 1:ps.Ngen) - λ[j]*(ω_hat_max[j] - ω_hat[j][i]))
+            act_s_lo = @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_min[j] for g in 1:ps.Ngen) + λ[j]*(ω_hat_min[j] - ω_hat[j][i]))
+            act_s_av = @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+            push!(s_up, act_s_up)
+            push!(s_lo, act_s_lo)
+            push!(s_av, act_s_av)
+            push!(ji_tuples, (j,i))
         end
     end
 
@@ -84,8 +92,18 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false)
     optimize!(m)
     @show termination_status(m)
     if termination_status(m)==OPTIMAL
-        return value.(λ)
+        s_up_dual = dual.(s_up)
+        s_lo_dual = dual.(s_lo)
+        s_av_dual = dual.(s_av)
+        return (model = m, lambdas = value.(λ), p = value.(p), A = value.(A),
+            s_up_dual = Dict(zip(ji_tuples, s_up_dual)), s_lo_dual = Dict(zip(ji_tuples, s_lo_dual)), 
+            s_av_dual = Dict(zip(ji_tuples, s_av_dual)))
     else
         return false
     end
+end
+
+
+function rand_test()
+    println(rand())
 end
