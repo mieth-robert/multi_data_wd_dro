@@ -1,5 +1,5 @@
 
-function run_robust_wc(simdata, epsilon, support_width; sample_support=false)
+function run_robust_wc(simdata, epsilon, support_width; sample_support=false, Nj=[5,10])
 
     ps = simdata.ps
     cE = simdata.cE
@@ -14,7 +14,7 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false)
     D = 2 # number of features/data vendors
     w = [100, 150] ./ ps.basemva # wind forecast
     w_dist = [Normal(0, f*0.15) for f in w] # (unknown) distribution of forecast errors
-    Nj = [5, 10] # number of samples from vendor
+    # Nj = [8, 10] # number of samples from vendor
     ω_hat_sampled =  [rand(w_dist[j], Nj[j]) for j in 1:D] # samples from each data source
     ω_hat = [ω_hat_sampled[j] .- mean(ω_hat_sampled[j]) for j in 1:D] # center samples
   
@@ -47,16 +47,18 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false)
     @variable(m, p[g=1:ps.Ngen] >=0)
     @variable(m, rp[g=1:ps.Ngen] >=0)
     @variable(m, rm[g=1:ps.Ngen] >=0)
-    @variable(m, λ[j=1:D] >=0)
+    @variable(m, λ[j=1:D])
     @variable(m, s[j=1:D, i=1:Nj[j]])
     @variable(m, A[g=1:ps.Ngen, j=1:D] >=0)
     @variable(m, fRAMp[l=1:ps.Nbranch] >=0)
     @variable(m, fRAMm[l=1:ps.Nbranch] >=0)
 
+    @constraint(m, lam_nonneg, λ .>= 0)
+
     @constraint(m, enerbal, sum(p) + sum(w) == sum(d))
     @constraint(m, p .+ rp .<= ps.gen_pmax)
     @constraint(m, p .- rm .>= ps.gen_pmin)
-    @constraint(m, A'ones(ps.Ngen) .== ones(ps.Nwind))
+    @constraint(m, balbal, A'ones(ps.Ngen) .== ones(ps.Nwind))
     flow = ptdf*(gen2bus*p + wind2bus*w - d)
     @constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
     @constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
@@ -95,15 +97,10 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false)
         s_up_dual = dual.(s_up)
         s_lo_dual = dual.(s_lo)
         s_av_dual = dual.(s_av)
-        return (model = m, lambdas = value.(λ), p = value.(p), A = value.(A),
+        return (model = m, lambdas = value.(λ), p = value.(p), A = value.(A), lam_nonneg_dual = dual.(m[:lam_nonneg]),
             s_up_dual = Dict(zip(ji_tuples, s_up_dual)), s_lo_dual = Dict(zip(ji_tuples, s_lo_dual)), 
-            s_av_dual = Dict(zip(ji_tuples, s_av_dual)))
+            s_av_dual = Dict(zip(ji_tuples, s_av_dual)), enerbal_dual = dual.(enerbal), balbal_dual = dual.(balbal) )
     else
         return false
     end
-end
-
-
-function rand_test()
-    println(rand())
 end
