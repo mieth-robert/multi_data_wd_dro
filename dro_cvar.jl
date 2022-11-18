@@ -77,10 +77,13 @@ set_optimizer_attribute(m, "OutputFlag", 1)
 
 # auxillary variables for wc exp. cost reformulation
 @variable(m, λ_cost[j=1:D] >=0)
-@variable(m, s_cost[i=1:Nprime])
+@variable(m, s_cost[j=1:D, i=1:Nprime])
 
 # auxillary variables for CVaR reformulation
 @variable(m, τ)
+a_mat = [-A; A; ptdf*(wind2bus - gen2bus*A); -ptdf*(wind2bus - gen2bus*A); zeros(D)']
+b_vec = [-rp .- τ; rm .- τ; -fRAMp .- τ; fRAMm .- τ; 0]
+K = size(b_vec)[1] # number of constraints WITH additonal row for CVaR reformulation
 @variable(m, v) 
 @variable(m, λ_cc[j=1:D] >=0)
 @variable(m, s_cc[j=1:D, i=1:Nprime])
@@ -98,10 +101,6 @@ flow = ptdf*(gen2bus*p + wind2bus*w - d)
 @constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
 
 # CVaR reformulation of chance constraints
-a_mat = [-A; A; ptdf*(wind2bus - gen2bus*A); -ptdf*(wind2bus - gen2bus*A); zeros(D)']
-b_vec = [-rp .- τ; rm .- τ; -fRAMp .- τ; fRAMm .- τ; 0]
-K = size(b_vec)[1] # number of constraints WITH additonal row for CVaR reformulation
-
 @constraint(m, 0 >= τ + v) 
 @constraint(m, gamma * v >= sum(λ_cc[j] * ϵj[j] for j in 1:D ) + (1/Nprime) * sum(s_cc[i] for i in 1:Nprime))
 @constraint(m, [i=1:Nprime, k=1:K], s_cc[i] >= b_vec[k] + sum(z[j,i,k]*ω_hat[j][i] + u[j,i,k]*ω_hat_max[j] - l[j,i,k]*ω_hat_min[j] for j in 1:D))
@@ -110,18 +109,21 @@ K = size(b_vec)[1] # number of constraints WITH additonal row for CVaR reformula
 @constraint(m, [j=1:D, i=1:Nprime, k=1:K], λ_cc[j] >= -z[j,i,k])
 
 # wasserstein worst case cost
-@constraint(m, [i=1:Nprime], s_cost[i] >= sum(sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(ω_hat_max[j] - ω_hat[j][i]) for j in 1:D))
-@constraint(m, [i=1:Nprime], s_cost[i] >= sum(sum((cA[g].*ps.basemva)*A[g,j]*ω_hat_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(ω_hat_min[j] - ω_hat[j][i]) for j in 1:D))
-@constraint(m, [i=1:Nprime], s_cost[i] >= sum(sum((cA[g].*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen) for j in 1:D))
+@constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(ω_hat_max[j] - ω_hat[j][i]))
+@constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(ω_hat_min[j] - ω_hat[j][i]))
+@constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
 
-
-# set objective
+# objective
 gencost = cE' * (p .* ps.basemva)
 rescost = cR' * ((rp .+ rm) .* ps.basemva)
-expcost = sum(λ_cost[j]*ϵj[j] for j in 1:D) + 1/Nprime * sum(s_cost[i] for i in 1:Nprime)
+expcost = sum(λ_cost[j]*ϵj[j]  + 1/Nprime * sum(s_cost[j,i] for i in 1:Nprime) for j in 1:D)
 @objective(m, Min, gencost + rescost + expcost)
 optimize!(m)
 
 
 ##
 
+# look at some data
+
+value.(flow)
+ps.branch_smax
