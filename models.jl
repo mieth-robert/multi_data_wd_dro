@@ -1,5 +1,5 @@
 
-function run_robust_wc(simdata, epsilon, support_width; sample_support=false, Nj=[5,10])
+function run_robust_wc(simdata, epsilon, support_width; sample_support=false, Nj=[5,10], rel_stv=[0.15,0.15])
 
     ps = simdata.ps
     cE = simdata.cE
@@ -13,29 +13,41 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false, Nj
     # wind power data and distributions
     D = 2 # number of features/data vendors
     w = [100, 150] ./ ps.basemva # wind forecast
-    w_dist = [Normal(0, f*0.15) for f in w] # (unknown) distribution of forecast errors
+    w_cap = [200, 300] ./ ps.basemva # installed capacity of resource
+    omega_min = support_width .* (-w)
+    omega_max = support_width .* (w_cap .- w)
+    w_dist = [truncated(Normal(0, rel_stv[j]*w[j]), omega_min[j], omega_max[j]) for j in 1:D] # (unknown) distribution of forecast errors
     # Nj = [8, 10] # number of samples from vendor
     ω_hat_sampled =  [rand(w_dist[j], Nj[j]) for j in 1:D] # samples from each data source
     ω_hat = [ω_hat_sampled[j] .- mean(ω_hat_sampled[j]) for j in 1:D] # center samples
-  
+    for j in 1:D
+        for (i,v) in enumerate(ω_hat[j]) 
+            if v < omega_min[j]
+                ω_hat[j][i] = omega_min[j]
+            elseif  v > omega_max[j]
+                ω_hat[j][i] = omega_max[j]
+            end
+        end
+    end
+
     # ϵj = [0.1, 0.005] # wasserstein budget for each data source
     ϵj = epsilon
-
-
-    N_total = prod(Nj)
-    emp_support = zeros((D,N_total))
-    for j in 1:D
-        for i in 0:N_total-1
-            emp_support[j, i+1] = ω_hat[j][mod(i,Nj[j])+1]
-        end
-    end 
-
+    
+    # empirical support is all possible combinations of observerd samples
+    emp_support = vec(collect(Base.product(ω_hat...)))
+    emp_support = [collect(tup) for tup in emp_support]
+    support_corners = [[omega_min[j], omega_max[j]] for j in 1:D]
+    emp_support_alt = vec(collect(Base.product(support_corners...)))
+    emp_support_alt = [collect(tup) for tup in emp_support_alt]
+    
     if sample_support
         ω_hat_max = [maximum(ω_hat[j]) for j in 1:D]
         ω_hat_min = [minimum(ω_hat[j]) for j in 1:D]
     else
-        ω_hat_max =  w .* support_width
-        ω_hat_min = -w .* support_width
+        # ω_hat_max =  w .* support_width
+        # ω_hat_min = -w .* support_width
+        ω_hat_max = omega_max
+        ω_hat_min = omega_min
     end
 
     # some tweaks
@@ -58,19 +70,38 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false, Nj
     @constraint(m, enerbal, sum(p) + sum(w) == sum(d))
     @constraint(m, p .+ rp .<= ps.gen_pmax)
     @constraint(m, p .- rm .>= ps.gen_pmin)
-    @constraint(m, balbal, A'ones(ps.Ngen) .== ones(ps.Nwind))
+    @constraint(m, balbal, A' * ones(ps.Ngen) .== ones(ps.Nwind))
     flow = ptdf*(gen2bus*p + wind2bus*w - d)
     @constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
     @constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
 
-    for ω_hat in emp_support
-        @constraint(m, -A*ω_hat .<= rp)
-        @constraint(m,  A*ω_hat .<= rm)
-        delta_flow = ptdf*(wind2bus - gen2bus*A)*ω_hat
-        @constraint(m,  delta_flow .<= fRAMp)
-        @constraint(m, -delta_flow .<= fRAMm)
-    end
+    # # robust with empirical support
+    # for ωi in emp_support_alt
+    #     println(ωi)
+    #     @constraint(m, -A*ωi .<= rp)
+    #     @constraint(m,  A*ωi .<= rm)
+    #     delta_flow = ptdf*(wind2bus - gen2bus*A)*ωi 
+    #     @constraint(m,  delta_flow .<= fRAMp)
+    #     @constraint(m, -delta_flow .<= fRAMm)
+    # end
 
+    # robust with polyhedral support
+    C = zeros(2*D, 2)
+    C[collect(1:2:2*D), :] = Diagonal(-ones(D))
+    C[collect(2:2:2*D), :] = Diagonal(ones(D))
+    d = zeros(2*D)
+    d[collect(1:2:2*D)] = -omega_min
+    d[collect(2:2:2*D)] = omega_max
+    @variable(m, yp[jj=1:(2*D), l=1:ps.Nbranch] >= 0)
+    @variable(m, ym[jj=1:(2*D), l=1:ps.Nbranch] >= 0)
+    @constraint(m,  -A*omega_min .<= rp)
+    @constraint(m,  A*omega_max .<= rm)
+    @constraint(m,  [l=1:ps.Nbranch], d'*yp[:,l] <=  fRAMp[l])
+    @constraint(m,  [l=1:ps.Nbranch], C'*yp[:,l] .== vec(ptdf[l,:]' * (wind2bus - gen2bus*A))) # vec necessary here, to make shape fit
+    @constraint(m,  [l=1:ps.Nbranch], d'*ym[:,l] <=  fRAMm[l])
+    @constraint(m,  [l=1:ps.Nbranch], C'*ym[:,l] .== vec(-ptdf[l,:]' * (wind2bus - gen2bus*A)))
+
+    # wc cost formulation
     ji_tuples = []
     s_up = []
     s_lo = []
@@ -87,6 +118,7 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false, Nj
         end
     end
 
+    # define objective
     gencost = cE' * (p .* ps.basemva)
     rescost = cR' * ((rp .+ rm) .* ps.basemva)
     expcost = sum(λ[j]*ϵj[j] + 1/Nj[j] * sum(s[j,i] for i in 1:Nj[j]) for j in 1:D)
@@ -99,7 +131,8 @@ function run_robust_wc(simdata, epsilon, support_width; sample_support=false, Nj
         s_av_dual = dual.(s_av)
         return (model = m, lambdas = value.(λ), p = value.(p), A = value.(A), lam_nonneg_dual = dual.(m[:lam_nonneg]),
             s_up_dual = Dict(zip(ji_tuples, s_up_dual)), s_lo_dual = Dict(zip(ji_tuples, s_lo_dual)), 
-            s_av_dual = Dict(zip(ji_tuples, s_av_dual)), enerbal_dual = dual.(enerbal), balbal_dual = dual.(balbal) )
+            s_av_dual = Dict(zip(ji_tuples, s_av_dual)), enerbal_dual = dual.(enerbal), balbal_dual = dual.(balbal), 
+            expcost = value(expcost), rescost = value(rescost), gencost = value(gencost))
     else
         return false
     end

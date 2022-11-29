@@ -41,26 +41,15 @@ gen2bus = sparse(ps.gen_loc, 1:ps.Ngen, ones(ps.Ngen), ps.Nbus, ps.Ngen)
 wind2bus = sparse(ps.wind_loc, 1:ps.Nwind, ones(ps.Nwind), ps.Nbus, ps.Nwind)
 ptdf = create_ptdf_matrix(ps)
 
-# Simple DCOPF for analysis
-# mopf = Model(Gurobi.Optimizer)
-# @variable(mopf, p[g=1:ps.Ngen] >= 0)
-# @constraint(mopf, sum(p) == sum(d))
-# @constraint(mopf, p .<= ps.gen_pmax)
-# @constraint(mopf, p .>= ps.gen_pmin)
-# flow = ptdf*(gen2bus*p - d)
-# @constraint(mopf,  flow .<= ps.branch_smax)
-# @constraint(mopf, -flow .<= ps.branch_smax)
-# gen_cost = cE'*(p.*ps.basemva)
-# @objective(mopf, Min, gen_cost)
-# optimize!(mopf)
-# value.(p)
+##
+# include("models.jl")
 
 ##
 # Experiment 1
 # Test with different epsilon
 # set support width
 simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
-support_width = 0.1
+support_width = 1
 eps_set = [1., 0.5, 0.2, 0.1, 0.05, 0.01, 0.005, 0.001]
 lam_res = Dict()
 ener_mp_res = Dict()
@@ -74,7 +63,7 @@ for (ei,e) in enumerate(eps_set)
         Random.seed!(42) # reset seed here so that every set of parameters has same set of samples
         for i in 1:10
             # run 10 times and average to reduce effects from samples
-            res = run_robust_wc(simdat, act_eps, support_width; sample_support=true)
+            res = run_robust_wc(simdat, act_eps, support_width; sample_support=false)
             lam .+= res.lambdas
             ener_mp += res.enerbal_dual
             bal_mp += res.balbal_dual
@@ -106,16 +95,12 @@ CSV.write("lam_res.csv", lam_df)
 
 ## 
 # Single run
+include("models.jl")
 Random.seed!(42)
 simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
 support_width = 0.5
-res = run_robust_wc(simdat, [0.1, 0.1], 0.25; sample_support=false, Nj=[5,10])
 
-@show res.lambdas
-
-res.s_up_dual
-res.s_lo_dual
-res.s_av_dual
+res = run_robust_wc(simdat, [0.1, 0.1], support_width; sample_support=false, Nj=[5,10]);
 
 dual_df = DataFrame(
     j = [k[1] for (k,v) in res.s_up_dual],
@@ -124,58 +109,24 @@ dual_df = DataFrame(
     lo = [v for (k,v) in res.s_lo_dual],
     av = [v for (k,v) in res.s_av_dual],
 )
-# CSV.write("dual_res.csv", dual_df)
-
-res.lam_nonneg_dual
-
-ones(5)'*(res.A .* [cA cA]) .* ps.basemva 
-res.lambdas
-
+CSV.write("dual_res.csv", dual_df)
 ##
 
-res.enerbal_dual
-res.balbal_dual
-
-##
-
-for i in 1:1000
-    res = run_robust_wc(simdat, [0.1, 0.1], 0.25; sample_support=false, Nj=[5,10])
-    if sum([res.s_up_dual[k] * v for (k,v) in res.s_lo_dual]) != 0
-        dual_df = DataFrame(
-            j = [k[1] for (k,v) in res.s_up_dual],
-            i = [k[2] for (k,v) in res.s_up_dual],
-            up = [v for (k,v) in res.s_up_dual],
-            lo = [v for (k,v) in res.s_lo_dual],
-            av = [v for (k,v) in res.s_av_dual],
-        )
-        CSV.write("dual_res.csv", dual_df)
-        println("NONZERO")
-        break
-    end
-end
-
-##
-res.s_up_dual
-
-
-
-# # Create some plots
-
-# lam1_grid = zeros(length(eps_set), length(eps_set))
-# lam2_grid = zeros(length(eps_set), length(eps_set))
-# for (k,v) in lam_res
-#     lam1_grid[k[1], k[2]] = v[1]
-#     lam2_grid[k[1], k[2]] = v[2]
-# end
-
-# fig, axs = plt.subplots(2, 1)
-# axs[1].pcolor(lam1_grid)
-# axs[2].pcolor(lam2_grid)
-# for i in size(lam1_grid, 1)
-#     for j in size(lam1_grid, 2)
-#         axs[1].text(j, i, "$(lam1_grid[i,j])", ha="center", va="center")
+# for i in 1:1000
+#     res = run_robust_wc(simdat, [0.1, 0.1], 0.25; sample_support=false, Nj=[5,10])
+#     if sum([res.s_up_dual[k] * v for (k,v) in res.s_lo_dual]) != 0
+#         dual_df = DataFrame(
+#             j = [k[1] for (k,v) in res.s_up_dual],
+#             i = [k[2] for (k,v) in res.s_up_dual],
+#             up = [v for (k,v) in res.s_up_dual],
+#             lo = [v for (k,v) in res.s_lo_dual],
+#             av = [v for (k,v) in res.s_av_dual],
+#         )
+#         CSV.write("dual_res.csv", dual_df)
+#         println("NONZERO")
+#         break
 #     end
 # end
-# gcf()
 
-# CSV.write("lam1.csv",  Tables.table(lam1_grid), writeheader=false)
+##
+
