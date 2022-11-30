@@ -63,7 +63,8 @@ for (ei,e) in enumerate(eps_set)
         Random.seed!(42) # reset seed here so that every set of parameters has same set of samples
         for i in 1:10
             # run 10 times and average to reduce effects from samples
-            res = run_robust_wc(simdat, act_eps, support_width; sample_support=false)
+            # res = run_robust_wc(simdat, act_eps, support_width; sample_support=false)
+            res = run_robust_wc_milage(simdat, act_eps, support_width; sample_support=false)
             lam .+= res.lambdas
             ener_mp += res.enerbal_dual
             bal_mp += res.balbal_dual
@@ -95,12 +96,15 @@ CSV.write("lam_res.csv", lam_df)
 
 ## 
 # Single run
-include("models.jl")
+# include("models.jl")
 Random.seed!(42)
 simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
 support_width = 0.5
 
 res = run_robust_wc(simdat, [0.1, 0.1], support_width; sample_support=false, Nj=[5,10]);
+@show objective_value(res.model)
+@show value.(res.enerbal_dual)
+@show value.(res.balbal_dual)
 
 dual_df = DataFrame(
     j = [k[1] for (k,v) in res.s_up_dual],
@@ -111,6 +115,37 @@ dual_df = DataFrame(
 )
 CSV.write("dual_res.csv", dual_df)
 ##
+
+## 
+# Single run with mileage cost
+# include("models.jl")
+Random.seed!(42)
+simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
+support_width = 0.1
+
+res_mil = run_robust_wc_milage(simdat, [0.1, 0.1], support_width; sample_support=false, Nj=[5,10]);
+@show objective_value(res_mil.model)
+@show value.(res_mil.enerbal_dual)
+@show value.(res_mil.balbal_dual)
+
+##
+
+@show objective_value(res.model)
+@show value.(res.enerbal_dual)
+@show value.(res.balbal_dual)
+
+# w/ mileage
+# objective_value(res.model) = 26704.526650719705
+# value.(res.enerbal_dual) = 5658.698092031426
+# value.(res.balbal_dual) = [1650.0, 6044.0235690235695]
+
+# with mileage
+# objective_value(res_mil.model) = 27802.61304812931
+# value.(res_mil.enerbal_dual) = 6049.883561901176
+# value.(res_mil.balbal_dual) = [1800.9153008010317, 6934.198373982492]
+
+##
+
 
 # for i in 1:1000
 #     res = run_robust_wc(simdat, [0.1, 0.1], 0.25; sample_support=false, Nj=[5,10])
