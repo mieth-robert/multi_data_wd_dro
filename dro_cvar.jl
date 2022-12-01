@@ -10,18 +10,11 @@ using DataFrames
 import PyPlot as plt
 
 ##
+
+include("tools.jl")
 include("models.jl")
 
-mutable struct SimData
-    ps::Any
-    cE::Vector{Float64}
-    cR::Vector{Float64}
-    cA::Vector{Float64}
-    d::Vector{Float64}
-    gen2bus::Union{SparseMatrixCSC, Matrix}
-    wind2bus::Union{SparseMatrixCSC, Matrix}
-    ptdf::Union{SparseMatrixCSC, Matrix}
-end
+##
 
 # power system data
 case_file = "data/matpower/case5.m"
@@ -42,98 +35,20 @@ wind2bus = sparse(ps.wind_loc, 1:ps.Nwind, ones(ps.Nwind), ps.Nbus, ps.Nwind)
 ptdf = create_ptdf_matrix(ps)
 
 ##
-# wind power data and distributions
+# single run 
+w = [100, 150] ./ ps.basemva 
+w_cap = [200, 300] ./ ps.basemva 
 
-ϵj = [0.01, 0.01] # wasserstein budget for each data source
 support_width = 0.25
+
+simdat = SimData(ps, cE, cR, cA, d, w, w_cap, support_width, gen2bus, wind2bus, ptdf)
 Random.seed!(42)
+samples = create_sample_data_standardized(simdat, 10, [0.15, 0.15])
 
-D = 2 # number of features/data vendors
-w = [100, 150] ./ ps.basemva # wind forecast
-w_dist = [Normal(0, f*0.15) for f in w] # (unknown) distribution of forecast errors
-w_cap = [200, 300] ./ ps.basemva # installed capacity of resource
-omega_min = support_width .* (-w)
-omega_max = support_width .* (w_cap .- w)
-Nprime = 10 # number of standardized samples
-ω_hat_sampled = [rand(w_dist[j], Nprime) for j in 1:D] # samples from each data source
-ω_hat = [ω_hat_sampled[j] .- mean(ω_hat_sampled[j]) for j in 1:D] # center samples
+epsilons = [1, 1] # both lambdas zero
 
-# basic support
-for j in 1:D
-    for (i,v) in enumerate(ω_hat[j]) 
-        if v < omega_min[j]
-            ω_hat[j][i] = omega_min[j]
-        elseif  v > omega_max[j]
-            ω_hat[j][i] = omega_max[j]
-        end
-    end
-end
-
-##
-
-# some settings
-gamma = 0.1 # risk level for chance constraint
-FR = 0.8 # factor for flow limits
-ω_hat_max = omega_max
-ω_hat_min = omega_min
-
-##
-
-# CVAR DCOPF with WD-DR Cost
-m = Model(Gurobi.Optimizer)
-set_optimizer_attribute(m, "OutputFlag", 1)
-@variable(m, p[g=1:ps.Ngen] >=0)
-@variable(m, rp[g=1:ps.Ngen] >=0)
-@variable(m, rm[g=1:ps.Ngen] >=0)
-@variable(m, A[g=1:ps.Ngen, j=1:D] >=0)
-@variable(m, fRAMp[l=1:ps.Nbranch] >=0)
-@variable(m, fRAMm[l=1:ps.Nbranch] >=0)
-
-# auxillary variables for wc exp. cost reformulation
-@variable(m, λ_cost[j=1:D] >=0)
-@variable(m, s_cost[j=1:D, i=1:Nprime])
-
-# auxillary variables for CVaR reformulation
-@variable(m, τ)
-a_mat = [-A; A; ptdf*(wind2bus - gen2bus*A); -ptdf*(wind2bus - gen2bus*A); zeros(D)']
-b_vec = [-rp .- τ; -rm .- τ; -fRAMp .- τ; -fRAMm .- τ; 0]
-K = size(b_vec)[1] # number of constraints WITH additonal row for CVaR reformulation
-@variable(m, v) 
-@variable(m, λ_cc[j=1:D] >=0)
-@variable(m, s_cc[j=1:D, i=1:Nprime])
-@variable(m, z[j=1:D, i=1:Nprime, k=1:K])
-@variable(m, u[j=1:D, i=1:Nprime, k=1:K] >= 0)
-@variable(m, l[j=1:D, i=1:Nprime, k=1:K] >= 0)
-
-# basic constraints
-@constraint(m, enerbal, sum(p) + sum(w) == sum(d))
-@constraint(m, p .+ rp .<= ps.gen_pmax)
-@constraint(m, p .- rm .>= ps.gen_pmin)
-@constraint(m, balbal, A'ones(ps.Ngen) .== ones(ps.Nwind))
-flow = ptdf*(gen2bus*p + wind2bus*w - d)
-@constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
-@constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
-
-# # CVaR reformulation of chance constraints
-@constraint(m, 0 >= τ + v) 
-@constraint(m, gamma * v >= sum(λ_cc[j] * ϵj[j] for j in 1:D ) + (1/Nprime) * sum(s_cc[i] for i in 1:Nprime))
-@constraint(m, [i=1:Nprime, k=1:K], s_cc[i] >= b_vec[k] + sum(z[j,i,k]*ω_hat[j][i] + u[j,i,k]*ω_hat_max[j] - l[j,i,k]*ω_hat_min[j] for j in 1:D))
-@constraint(m, [j=1:D, i=1:Nprime, k=1:K], u[j,i,k] - l[j,i,k] == a_mat[k,j] - z[j,i,k])
-@constraint(m, [j=1:D, i=1:Nprime, k=1:K], λ_cc[j] >=  z[j,i,k])
-@constraint(m, [j=1:D, i=1:Nprime, k=1:K], λ_cc[j] >= -z[j,i,k])
-
-# wasserstein worst case cost
-@constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(ω_hat_max[j] - ω_hat[j][i]))
-@constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(ω_hat_min[j] - ω_hat[j][i]))
-@constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
-
-# objective
-gencost = cE' * (p .* ps.basemva)
-rescost = cR' * ((rp .+ rm) .* ps.basemva)
-expcost = sum(λ_cost[j]*ϵj[j]  + 1/Nprime * sum(s_cost[j,i] for i in 1:Nprime) for j in 1:D)
-@objective(m, Min, gencost + rescost + expcost)
-optimize!(m)
-
+res = run_cvar_wc(simdat, samples, epsilons; gamma=0.1)
+objective_value(res)
 
 ##
 

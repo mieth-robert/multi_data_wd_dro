@@ -10,18 +10,11 @@ using DataFrames
 import PyPlot as plt
 
 ##
-include("models.jl")
 
-mutable struct SimData
-    ps::Any
-    cE::Vector{Float64}
-    cR::Vector{Float64}
-    cA::Vector{Float64}
-    d::Vector{Float64}
-    gen2bus::Union{SparseMatrixCSC, Matrix}
-    wind2bus::Union{SparseMatrixCSC, Matrix}
-    ptdf::Union{SparseMatrixCSC, Matrix}
-end
+include("tools.jl")
+include("models.jl")
+ 
+##
 
 # power system data
 case_file = "data/matpower/case5.m"
@@ -42,14 +35,31 @@ wind2bus = sparse(ps.wind_loc, 1:ps.Nwind, ones(ps.Nwind), ps.Nbus, ps.Nwind)
 ptdf = create_ptdf_matrix(ps)
 
 ##
-# include("models.jl")
+
+w = [100, 150] ./ ps.basemva # wind forecast
+w_cap = [200, 300] ./ ps.basemva # installed capacity of resource
+support_width = 0.25
+
+simdat = SimData(ps, cE, cR, cA, d, w, w_cap, support_width, gen2bus, wind2bus, ptdf)
+Random.seed!(42)
+data = create_sample_data(simdat, [5,10], [0.15, 0.15])
+
+data.samples
+
+
+##
 
 ##
 # Experiment 1
 # Test with different epsilon
-# set support width
-simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
-support_width = 1
+# 
+w = [100, 150] ./ ps.basemva # wind forecast
+w_cap = [200, 300] ./ ps.basemva # installed capacity of resource
+
+support_width = 0.25
+
+simdat = SimData(ps, cE, cR, cA, d, w, w_cap, support_width, gen2bus, wind2bus, ptdf)
+
 eps_set = [1., 0.5, 0.2, 0.1, 0.05, 0.01, 0.005, 0.001]
 lam_res = Dict()
 ener_mp_res = Dict()
@@ -63,7 +73,8 @@ for (ei,e) in enumerate(eps_set)
         Random.seed!(42) # reset seed here so that every set of parameters has same set of samples
         for i in 1:10
             # run 10 times and average to reduce effects from samples
-            res = run_robust_wc(simdat, act_eps, support_width; sample_support=false)
+            samples = create_sample_data(simdat, [5,10], [0.15, 0.15])
+            res = run_robust_wc(simdat, samples, act_eps)
             # res = run_robust_wc_milage(simdat, act_eps, support_width; sample_support=false)
             lam .+= res.lambdas
             ener_mp += res.enerbal_dual
@@ -97,14 +108,20 @@ CSV.write("lam_res.csv", lam_df)
 ## 
 # Single run
 # include("models.jl")
-Random.seed!(42)
-simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
+w = [100, 150] ./ ps.basemva # wind forecast
+w_cap = [200, 300] ./ ps.basemva # installed capacity of resource
+
 support_width = 0.25
-epsilons = [1, 1] # both lambdas zero
-epsilons = [0.5, 0.2] # both lam1 zero, lam2 nonzero
+
+simdat = SimData(ps, cE, cR, cA, d, w, w_cap, support_width, gen2bus, wind2bus, ptdf)
+Random.seed!(42)
+samples = create_sample_data(simdat, [5,10], [0.15, 0.15])
+
+# epsilons = [1, 1] # both lambdas zero
+epsilons = [0.5, 0.2] # lam1 zero, lam2 nonzero
 # epsilons = [0.1, 0.1] # both lambdas nonzero
 
-res = run_robust_wc(simdat, epsilons, support_width; sample_support=false, Nj=[5,10]);
+res = run_robust_wc(simdat, samples, epsilons)
 Ares = value.(res.model[:A])
 balcost = (cA' * Ares) .* ps.basemva
 wccost2 = sum(epsilons .* res.lambdas)
@@ -125,23 +142,27 @@ wccost2 = sum(epsilons .* res.lambdas)
 # CSV.write("dual_res.csv", dual_df)
 ##
 
+
 ## 
 # Single run with mileage cost
 # include("models.jl")
-Random.seed!(42)
-simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
-support_width = 0.1
+w = [100, 150] ./ ps.basemva # wind forecast
+w_cap = [200, 300] ./ ps.basemva # installed capacity of resource
 
-res_mil = run_robust_wc_milage(simdat, [0.1, 0.1], support_width; sample_support=false, Nj=[5,10]);
+support_width = 0.25
+
+simdat = SimData(ps, cE, cR, cA, d, w, w_cap, support_width, gen2bus, wind2bus, ptdf)
+Random.seed!(42)
+samples = create_sample_data(simdat, [5,10], [0.15, 0.15])
+
+epsilons = [0.1, 0.1]
+
+res_mil = run_robust_wc_milage(simdat, samples, epsilons)
 @show objective_value(res_mil.model)
 @show value.(res_mil.enerbal_dual)
 @show value.(res_mil.balbal_dual)
 
 ##
-
-@show objective_value(res.model)
-@show value.(res.enerbal_dual)
-@show value.(res.balbal_dual)
 
 # w/ mileage
 # objective_value(res.model) = 26704.526650719705
