@@ -212,7 +212,7 @@ function run_robust_wc_milage(simdata, samples, ϵj)
 end
 
 
-function run_cvar_wc(simdata, samples, ϵj; gamma=0.1)
+function run_cvar_wc(simdata, samples, ϵj; gamma=0.1, mileage_cost=false)
 # run with cvar approximated joint chance constraint
 
     ps = simdata.ps
@@ -279,9 +279,17 @@ function run_cvar_wc(simdata, samples, ϵj; gamma=0.1)
     @constraint(m, [j=1:D, i=1:Nprime, k=1:K], λ_cc[j] >= -z[j,i,k])
 
     # wasserstein worst case cost
-    @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(omega_max[j] - ω_hat[j][i]))
-    @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(omega_min[j] - ω_hat[j][i]))
-    @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+    if mileage_cost 
+    # calculate cost of reserve activation as c^A*abs(r(ω))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(omega_max[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((-cA[g] .* ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(omega_min[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((-cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+    else
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(omega_max[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(omega_min[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+    end
 
     # objective
     gencost = cE' * (p .* ps.basemva)
@@ -300,3 +308,5 @@ function run_cvar_wc(simdata, samples, ϵj; gamma=0.1)
         return false
     end
 end
+
+

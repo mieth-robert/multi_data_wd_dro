@@ -61,7 +61,7 @@ for (ei,e) in enumerate(eps_set)
         for i in 1:10
             # run 10 times and average to reduce effects from samples
             samples = create_sample_data_standardized(simdat, 10, [0.15, 0.15])
-            res = run_cvar_wc(simdat, samples, act_eps; gamma=0.1)
+            res = run_cvar_wc(simdat, samples, act_eps; gamma=0.1, mileage_cost=true)
             lam_cost .+= res.lambdas_cost
             lam_cc .+= res.lambdas_cc
             ener_mp += res.enerbal_dual
