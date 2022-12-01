@@ -42,26 +42,40 @@ wind2bus = sparse(ps.wind_loc, 1:ps.Nwind, ones(ps.Nwind), ps.Nbus, ps.Nwind)
 ptdf = create_ptdf_matrix(ps)
 
 ##
-
 # wind power data and distributions
+
+ϵj = [0.01, 0.01] # wasserstein budget for each data source
+support_width = 0.25
+Random.seed!(42)
+
 D = 2 # number of features/data vendors
 w = [100, 150] ./ ps.basemva # wind forecast
 w_dist = [Normal(0, f*0.15) for f in w] # (unknown) distribution of forecast errors
+w_cap = [200, 300] ./ ps.basemva # installed capacity of resource
+omega_min = support_width .* (-w)
+omega_max = support_width .* (w_cap .- w)
 Nprime = 10 # number of standardized samples
-Random.seed!(42)
 ω_hat_sampled = [rand(w_dist[j], Nprime) for j in 1:D] # samples from each data source
 ω_hat = [ω_hat_sampled[j] .- mean(ω_hat_sampled[j]) for j in 1:D] # center samples
 
-ϵj = [0.01, 0.01] # wasserstein budget for each data source
-
 # basic support
-support_width = 0.25
-ω_hat_max =  w .* support_width
-ω_hat_min = -w .* support_width
+for j in 1:D
+    for (i,v) in enumerate(ω_hat[j]) 
+        if v < omega_min[j]
+            ω_hat[j][i] = omega_min[j]
+        elseif  v > omega_max[j]
+            ω_hat[j][i] = omega_max[j]
+        end
+    end
+end
 
-# some settins
+##
+
+# some settings
 gamma = 0.1 # risk level for chance constraint
 FR = 0.8 # factor for flow limits
+ω_hat_max = omega_max
+ω_hat_min = omega_min
 
 ##
 
@@ -82,7 +96,7 @@ set_optimizer_attribute(m, "OutputFlag", 1)
 # auxillary variables for CVaR reformulation
 @variable(m, τ)
 a_mat = [-A; A; ptdf*(wind2bus - gen2bus*A); -ptdf*(wind2bus - gen2bus*A); zeros(D)']
-b_vec = [-rp .- τ; rm .- τ; -fRAMp .- τ; fRAMm .- τ; 0]
+b_vec = [-rp .- τ; -rm .- τ; -fRAMp .- τ; -fRAMm .- τ; 0]
 K = size(b_vec)[1] # number of constraints WITH additonal row for CVaR reformulation
 @variable(m, v) 
 @variable(m, λ_cc[j=1:D] >=0)
@@ -100,7 +114,7 @@ flow = ptdf*(gen2bus*p + wind2bus*w - d)
 @constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
 @constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
 
-# CVaR reformulation of chance constraints
+# # CVaR reformulation of chance constraints
 @constraint(m, 0 >= τ + v) 
 @constraint(m, gamma * v >= sum(λ_cc[j] * ϵj[j] for j in 1:D ) + (1/Nprime) * sum(s_cc[i] for i in 1:Nprime))
 @constraint(m, [i=1:Nprime, k=1:K], s_cc[i] >= b_vec[k] + sum(z[j,i,k]*ω_hat[j][i] + u[j,i,k]*ω_hat_max[j] - l[j,i,k]*ω_hat_min[j] for j in 1:D))
@@ -124,6 +138,10 @@ optimize!(m)
 ##
 
 # look at some data
+
+
+b_vec[2]
+
 
 value.(flow)
 ps.branch_smax

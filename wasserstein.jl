@@ -63,8 +63,8 @@ for (ei,e) in enumerate(eps_set)
         Random.seed!(42) # reset seed here so that every set of parameters has same set of samples
         for i in 1:10
             # run 10 times and average to reduce effects from samples
-            # res = run_robust_wc(simdat, act_eps, support_width; sample_support=false)
-            res = run_robust_wc_milage(simdat, act_eps, support_width; sample_support=false)
+            res = run_robust_wc(simdat, act_eps, support_width; sample_support=false)
+            # res = run_robust_wc_milage(simdat, act_eps, support_width; sample_support=false)
             lam .+= res.lambdas
             ener_mp += res.enerbal_dual
             bal_mp += res.balbal_dual
@@ -99,21 +99,30 @@ CSV.write("lam_res.csv", lam_df)
 # include("models.jl")
 Random.seed!(42)
 simdat = SimData(ps, cE, cR, cA, d, gen2bus, wind2bus, ptdf)
-support_width = 0.5
+support_width = 0.25
+epsilons = [1, 1] # both lambdas zero
+epsilons = [0.5, 0.2] # both lam1 zero, lam2 nonzero
+# epsilons = [0.1, 0.1] # both lambdas nonzero
 
-res = run_robust_wc(simdat, [0.1, 0.1], support_width; sample_support=false, Nj=[5,10]);
+res = run_robust_wc(simdat, epsilons, support_width; sample_support=false, Nj=[5,10]);
+Ares = value.(res.model[:A])
+balcost = (cA' * Ares) .* ps.basemva
+wccost2 = sum(epsilons .* res.lambdas)
 @show objective_value(res.model)
 @show value.(res.enerbal_dual)
 @show value.(res.balbal_dual)
+@show res.lambdas
+@show balcost
+@show wccost2
 
-dual_df = DataFrame(
-    j = [k[1] for (k,v) in res.s_up_dual],
-    i = [k[2] for (k,v) in res.s_up_dual],
-    up = [v for (k,v) in res.s_up_dual],
-    lo = [v for (k,v) in res.s_lo_dual],
-    av = [v for (k,v) in res.s_av_dual],
-)
-CSV.write("dual_res.csv", dual_df)
+# dual_df = DataFrame(
+#     j = [k[1] for (k,v) in res.s_up_dual],
+#     i = [k[2] for (k,v) in res.s_up_dual],
+#     up = [v for (k,v) in res.s_up_dual],
+#     lo = [v for (k,v) in res.s_lo_dual],
+#     av = [v for (k,v) in res.s_av_dual],
+# )
+# CSV.write("dual_res.csv", dual_df)
 ##
 
 ## 
