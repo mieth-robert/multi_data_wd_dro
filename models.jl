@@ -93,6 +93,8 @@ function run_robust_wc(simdata, samples, ϵj)
     @objective(m, Min, gencost + rescost + expcost)
     optimize!(m)
     @show termination_status(m)
+
+    # return 
     if termination_status(m)==OPTIMAL
         s_up_dual = dual.(s_up)
         s_lo_dual = dual.(s_lo)
@@ -194,6 +196,8 @@ function run_robust_wc_milage(simdata, samples, ϵj)
     @objective(m, Min, gencost + rescost + expcost)
     optimize!(m)
     @show termination_status(m)
+
+    # return
     if termination_status(m)==OPTIMAL
         s_up_dual = dual.(s_up)
         s_lo_dual = dual.(s_lo)
@@ -233,7 +237,7 @@ function run_cvar_wc(simdata, samples, ϵj; gamma=0.1)
 
     # CVAR DCOPF with WD-DR Cost
     m = Model(Gurobi.Optimizer)
-    set_optimizer_attribute(m, "OutputFlag", 1)
+    set_optimizer_attribute(m, "OutputFlag", 0)
     @variable(m, p[g=1:ps.Ngen] >=0)
     @variable(m, rp[g=1:ps.Ngen] >=0)
     @variable(m, rm[g=1:ps.Ngen] >=0)
@@ -285,7 +289,14 @@ function run_cvar_wc(simdata, samples, ϵj; gamma=0.1)
     expcost = sum(λ_cost[j]*ϵj[j]  + 1/Nprime * sum(s_cost[j,i] for i in 1:Nprime) for j in 1:D)
     @objective(m, Min, gencost + rescost + expcost)
     optimize!(m)
+    @show termination_status(m)
 
-    return (model=m)
-
+     # return 
+     if termination_status(m)==OPTIMAL
+        return (model = m, lambdas_cost = value.(λ_cost), lambdas_cc = value.(λ_cc), 
+                p = value.(p), A = value.(A), enerbal_dual = dual.(enerbal), balbal_dual = dual.(balbal), 
+                expcost = value(expcost), rescost = value(rescost), gencost = value(gencost))
+    else
+        return false
+    end
 end
