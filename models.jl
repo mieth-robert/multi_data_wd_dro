@@ -1,5 +1,5 @@
 
-function run_robust_wc(simdata, samples, ϵj, empirical_support=false)
+function run_robust_wc(simdata, samples, ϵj; empirical_support=false)
 
     ps = simdata.ps
     cE = simdata.cE
@@ -114,7 +114,7 @@ function run_robust_wc(simdata, samples, ϵj, empirical_support=false)
 end
 
 
-function run_robust_wc_milage(simdata, samples, ϵj)
+function run_robust_wc_milage(simdata, samples, ϵj; empirical_support=false)
 # same as run_robust_wc but with milage cost
 
     ps = simdata.ps
