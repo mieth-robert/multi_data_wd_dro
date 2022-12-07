@@ -28,7 +28,8 @@ function create_sample_data(simdata::SimData, Nj::Vector{Int64}, rel_stdv::Vecto
     omega_max = support_width .* (w_cap .- w)
 
     # create distributions and sample
-    w_dist = [truncated(Normal(0, rel_stdv[j]*w[j]), omega_min[j], omega_max[j]) for j in 1:D] # (unknown) distribution of forecast errors
+    w_dist = [Normal(0, rel_stdv[j]*w[j]) for j in 1:D] # (unknown) distribution of forecast errors
+    # w_dist = [truncated(Normal(0, rel_stdv[j]*w[j]), omega_min[j], omega_max[j]) for j in 1:D] # (unknown) distribution of forecast errors
     ω_hat_sampled =  [rand(w_dist[j], Nj[j]) for j in 1:D] # samples from each data source
     ω_hat = [ω_hat_sampled[j] .- mean(ω_hat_sampled[j]) for j in 1:D] # center samples
     for j in 1:D # truncate to fit into support
@@ -41,6 +42,10 @@ function create_sample_data(simdata::SimData, Nj::Vector{Int64}, rel_stdv::Vecto
         end
     end
 
+    # emp max and min
+    omega_max_emp = maximum.(samples.samples)
+    omega_min_emp = minimum.(samples.samples)
+
     # empirical support is all possible combinations of observerd samples
     emp_support = vec(collect(Base.product(ω_hat...)))
     emp_support = [collect(tup) for tup in emp_support]
@@ -51,7 +56,7 @@ function create_sample_data(simdata::SimData, Nj::Vector{Int64}, rel_stdv::Vecto
     poly_support_vertices = [collect(tup) for tup in poly_support_vertices]
     
     return (samples=ω_hat, emp_support=emp_support, poly_support_vertices=poly_support_vertices, 
-            omega_min=omega_min, omega_max=omega_max, Nj=Nj)
+            omega_min=omega_min, omega_max=omega_max, omega_max_emp=omega_max_emp, omega_min_emp=omega_min_emp, Nj=Nj)
 end
 
 function create_sample_data_standardized(simdata::SimData, Nprime::Int64, rel_stdv::Vector{Float64})

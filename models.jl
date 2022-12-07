@@ -1,5 +1,5 @@
 
-function run_robust_wc(simdata, samples, ϵj)
+function run_robust_wc(simdata, samples, ϵj, empirical_support=false)
 
     ps = simdata.ps
     cE = simdata.cE
@@ -15,8 +15,13 @@ function run_robust_wc(simdata, samples, ϵj)
     Nj = samples.Nj
     D = length(Nj)
     ω_hat = samples.samples
-    omega_max = samples.omega_max
-    omega_min = samples.omega_min
+    if empirical_support
+        omega_max = samples.omega_max_emp
+        omega_min = samples.omega_min_emp
+    else
+        omega_max = samples.omega_max
+        omega_min = samples.omega_min
+    end
 
     # some tweaks
     FR = 0.8 # factor for flow limits
@@ -40,8 +45,8 @@ function run_robust_wc(simdata, samples, ϵj)
     @constraint(m, p .- rm .>= ps.gen_pmin)
     @constraint(m, balbal, A' * ones(ps.Ngen) .== ones(ps.Nwind))
     flow = ptdf*(gen2bus*p + wind2bus*w - d)
-    @constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
-    @constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
+    @constraint(m, flowlim_up,  flow .== (ps.branch_smax .* FR) .- fRAMp)
+    @constraint(m, flowlim_dn, -flow .== (ps.branch_smax .* FR) .- fRAMm)
 
     # # robust with empirical support
     # for ωi in samples.poly_support_vertices
@@ -76,9 +81,9 @@ function run_robust_wc(simdata, samples, ϵj)
     s_av = []
     for j in 1:D
         for i in 1:Nj[j]
-            act_s_up = @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ[j]*(omega_max[j] - ω_hat[j][i]))
-            act_s_lo = @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ[j]*(omega_min[j] - ω_hat[j][i]))
-            act_s_av = @constraint(m, s[j,i] >= sum((cA[g].*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+            act_s_up = @constraint(m, s[j,i] >= sum((cA[g]*ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ[j]*(omega_max[j] - ω_hat[j][i]))
+            act_s_lo = @constraint(m, s[j,i] >= sum((cA[g]*ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ[j]*(omega_min[j] - ω_hat[j][i]))
+            act_s_av = @constraint(m, s[j,i] >= sum((cA[g]*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
             push!(s_up, act_s_up)
             push!(s_lo, act_s_lo)
             push!(s_av, act_s_av)
@@ -126,8 +131,13 @@ function run_robust_wc_milage(simdata, samples, ϵj)
     Nj = samples.Nj
     D = length(Nj)
     ω_hat = samples.samples
-    omega_max = samples.omega_max
-    omega_min = samples.omega_min
+    if empirical_support
+        omega_max = samples.omega_max_emp
+        omega_min = samples.omega_min_emp
+    else
+        omega_max = samples.omega_max
+        omega_min = samples.omega_min
+    end
 
     # some tweaks
     FR = 0.8 # factor for flow limits
@@ -211,7 +221,6 @@ function run_robust_wc_milage(simdata, samples, ϵj)
     end
 end
 
-
 function run_cvar_wc(simdata, samples, ϵj; gamma=0.1, mileage_cost=false)
 # run with cvar approximated joint chance constraint
 
@@ -265,10 +274,10 @@ function run_cvar_wc(simdata, samples, ϵj; gamma=0.1, mileage_cost=false)
     @constraint(m, enerbal, sum(p) + sum(w) == sum(d))
     @constraint(m, p .+ rp .<= ps.gen_pmax)
     @constraint(m, p .- rm .>= ps.gen_pmin)
-    @constraint(m, balbal, A'ones(ps.Ngen) .== ones(ps.Nwind))
+    @constraint(m, balbal, A' * ones(ps.Ngen) .== ones(ps.Nwind))
     flow = ptdf*(gen2bus*p + wind2bus*w - d)
-    @constraint(m,  flow .== (ps.branch_smax .* FR) .- fRAMp)
-    @constraint(m, -flow .== (ps.branch_smax .* FR) .- fRAMm)
+    @constraint(m, flowlim_up,  flow .== (ps.branch_smax .* FR) .- fRAMp)
+    @constraint(m, flowlim_dn, -flow .== (ps.branch_smax .* FR) .- fRAMm)
 
     # # CVaR reformulation of chance constraints
     @constraint(m, 0 >= τ + v) 
@@ -281,14 +290,14 @@ function run_cvar_wc(simdata, samples, ϵj; gamma=0.1, mileage_cost=false)
     # wasserstein worst case cost
     if mileage_cost 
     # calculate cost of reserve activation as c^A*abs(r(ω))
-        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(omega_max[j] - ω_hat[j][i]))
-        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((-cA[g] .* ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(omega_min[j] - ω_hat[j][i]))
-        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
-        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((-cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum(( cA[g]*ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(omega_max[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((-cA[g]*ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(omega_min[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum(( cA[g]*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((-cA[g]*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
     else
-        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(omega_max[j] - ω_hat[j][i]))
-        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(omega_min[j] - ω_hat[j][i]))
-        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g] .* ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g]*ps.basemva)*A[g,j]*omega_max[j] for g in 1:ps.Ngen) - λ_cost[j]*(omega_max[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g]*ps.basemva)*A[g,j]*omega_min[j] for g in 1:ps.Ngen) + λ_cost[j]*(omega_min[j] - ω_hat[j][i]))
+        @constraint(m, [j=1:D, i=1:Nprime], s_cost[j,i] >= sum((cA[g]*ps.basemva)*A[g,j]*ω_hat[j][i] for g in 1:ps.Ngen))
     end
 
     # objective
